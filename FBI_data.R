@@ -1,9 +1,11 @@
+Sys.setlocale("LC_TIME", "English")
 library(httr)
 library(jsonlite)
 library(fastDummies)
 library(tidyr)
 library(stringr)
 library(dplyr)
+library(lubridate)
 
 get_api_data <- function(pages, person_classification = '', status = '') {
   if (!is.numeric(pages)){
@@ -93,7 +95,16 @@ clean_api_data <- function(input_df) {
     month <- as.numeric(format(as.Date(date_col), '%m'))
     day <- as.numeric(format(as.Date(date_col), '%d'))
     
-    output_df <- data.frame(Year = year, Month = month, Day = day)
+    weekday <- wday(as.Date(date_col), label=TRUE)
+    
+    output_df <- data.frame(Year = year, Month = month,
+                            Day = day, Weekday = weekday)
+    
+    for (i in unique(output_df$Weekday)) {
+      output_df[[str_to_title(i)]] <- ifelse(grepl(i, output_df$Weekday), 1, 0)
+    }
+    
+    output_df <- within(output_df, rm('Weekday'))
     return(output_df)
   }
   
@@ -236,7 +247,3 @@ fbi_df <- get_api_data(1000)
 clean_fbi_df <- clean_api_data(fbi_df)
 # zostawilem reward, ale to usune w modelowaniu - fajnie jakby to bylo na plocie - jakies biny czy inne cuda 
 glimpse(clean_fbi_df)
-
-##LISTA ¯ALI
-#status/possible_countries/build dropuje, za du¿o na
-#nationality imho bez sensu, bo to FBI wiêc bêdzie du¿o hamerykanów i biased set
