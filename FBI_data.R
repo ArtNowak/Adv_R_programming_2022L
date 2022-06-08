@@ -6,6 +6,8 @@ library(tidyr)
 library(stringr)
 library(dplyr)
 library(lubridate)
+library(SHAPforxgboost)
+library(lime)
 
 get_api_data <- function(pages, person_classification = '', status = '') {
   if (!is.numeric(pages)){
@@ -247,3 +249,81 @@ fbi_df <- get_api_data(1000)
 clean_fbi_df <- clean_api_data(fbi_df)
 # zostawilem reward, ale to usune w modelowaniu - fajnie jakby to bylo na plocie - jakies biny czy inne cuda 
 glimpse(clean_fbi_df)
+
+input_df <- within(clean_fbi_df, rm('new_reward', 'Year', 'Month', 'Day'))
+
+regressionMetrics <- function(real, predicted) {
+  # Mean Square Error
+  MSE <- mean((real - predicted)^2)
+  # Root Mean Square Error
+  RMSE <- sqrt(MSE)
+  # Mean Absolute Error
+  MAE <- mean(abs(real - predicted))
+  # Mean Absolute Percentage Error
+  MAPE <- mean(abs(real - predicted)/real)
+  # Median Absolute Error
+  MedAE <- median(abs(real - predicted))
+  # Mean Logarithmic Absolute Error
+  MSLE <- mean((log(1 + real) - log(1 + predicted))^2)
+  # R2
+  R2 <- cor(predicted, real)^2
+  
+  result <- data.frame(MSE, RMSE, MAE, MAPE, MedAE, MSLE, R2)
+  return(result)
+}
+
+set.seed(2137)
+
+# Now Selecting 75% of data as sample from total 'n' rows of the data  
+sample <- sample.int(n = nrow(input_df), size = floor(.75*nrow(input_df)), replace = F)
+train <- input_df[sample, ]
+test  <- input_df[-sample, ]
+
+y_train = train[, dependent_variable]
+y_test <- test[, dependent_variable]
+X_train = train[, !(names(train) %in% dependent_variable)]
+X_test = test[, !(names(test) %in% dependent_variable)]
+
+library(xgboost)
+train_xgboost <- function(input_df, dependent_variable, X_train, X_test,
+                          y_train, y_test) {
+  
+  # binary variable
+  binary_vars <- sapply(input_df, function(x) { all(x %in% 0:1) })
+  if (dependent_variable %in% names(binary_vars)) {
+    xgb <- xgboost(data = data.matrix(X_train),
+                   label = y_train,
+                   nrounds = 25,
+                   objective = "binary:logistic")
+    y_pred <- predict(xgb, data.matrix(X_test))
+    prediction <- as.numeric(y_pred > 0.5)
+  } else {
+    xgb <- xgboost(data = data.matrix(X_train),
+                   label = y_train,
+                   nrounds = 25)
+    y_pred <- predict(xgb, data.matrix(X_test))
+    print(regressionMetrics(y_test, y_pred))
+  }
+  return(xgb)
+}
+
+xgb_model <- train_xgboost(input_df, 'Flight Risk', X_train, X_test,
+                           y_train, y_test)
+
+
+explain_local <- function(xgb_model, X_train, X_test, observation) {
+  explainer <- lime(X_train, xgb_model)
+  explanation <- explain(X_test[observation, ], explainer,
+                         labels = 1, n_features = 5)
+  plot_features(explanation)
+}
+explain_local(xgb_model, X_train, X_test, 2)
+
+
+explain_global <- function(xgb_model, X_train, X_test, n_features) {
+  shap_values <- shap.values(xgb_model = xgb_model, X_train = as.matrix(X_train))
+  shap_long <- shap.prep(shap_contrib = shap_values$shap_score
+                         , X_train = as.matrix(X_train), top_n = n_features)
+  shap.plot.summary(shap_long)
+}
+explain_global(xgb_model, X_train, X_test, 10)
