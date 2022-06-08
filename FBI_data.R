@@ -252,6 +252,39 @@ glimpse(clean_fbi_df)
 
 input_df <- within(clean_fbi_df, rm('new_reward', 'Year', 'Month', 'Day'))
 
+cols_list <- c("sex", "scars_and_marks", "Dangerous", "born_in_usa")
+
+plotting_graphs <- function(data, column){
+  if (any(cols_list == column)){
+    if (column == "sex"){
+      temp <- table(data[, column])
+      barplot(temp, main = "Gender breakdown of wanted persons",
+              xlab = "Male/Female", col = c("darkblue", "red"))
+    }else if (column == "scars_and_marks"){
+      temp <- table(data[, column])
+      barplot(temp, main = "Does wanted person have scars/marks",
+              xlab = "No/Yes", col = c("darkblue", "red"))
+    }else if (column == "Dangerous"){
+      temp <- table(data[, column])
+      barplot(temp, main = "Is wanted person dangerous?",
+              xlab = "No/Yes", col = c("darkblue", "red"))
+    }else if (column == "born_in_usa"){
+      temp <- table(data[, column])
+      barplot(temp, main = "Was wanted person born in USA?",
+              xlab = "No/Yes", col = c("darkblue", "red"))
+    }
+  }else {
+    print("This column can't be plotted!")
+  }
+}
+
+plotting_graphs(clean_fbi_df, "sex")
+plotting_graphs(clean_fbi_df, "scars_and_marks")
+plotting_graphs(clean_fbi_df, "Dangerous")
+plotting_graphs(clean_fbi_df, "born_in_usa")
+plotting_graphs(clean_fbi_df, "Age")
+
+
 regressionMetrics <- function(real, predicted) {
   # Mean Square Error
   MSE <- mean((real - predicted)^2)
