@@ -1,5 +1,7 @@
 library(httr)
 library(jsonlite)
+library(fastDummies)
+library(tidyr)
 
 get_api_data <- function(pages, person_classification = '', status = '') {
   if (!is.numeric(pages)){
@@ -144,14 +146,76 @@ df_new <- subset(cbind(df_new, clean_date(df_new$publication)),
 df_new <- split_vector_cols(c('field_offices', 'possible_countries'), df_new)
 # warning_message
 df_new <- clear_warning_message(df_new)
-# todo - dummies
+# SUPER DUPE £UKASZ PART
+df_new$`Flight Risk` <- ifelse(df_new$`Flight Risk` == 'TRUE', 1, 0)
+df_new$Dangerous <- ifelse(df_new$Dangerous == 'TRUE', 1, 0)
+df_new$Armed <- ifelse(df_new$Armed == 'TRUE', 1, 0)
+df_new$`Escape Risk` <- ifelse(df_new$`Escape Risk` == 'TRUE', 1, 0)
+df_new$`Extremely Dangerous` <- ifelse(df_new$`Extremely Dangerous` == 'TRUE', 1, 0)
+df_new$`High-Risk Arrest` <- ifelse(df_new$`High-Risk Arrest` == 'TRUE', 1, 0)
+df_new$`Violent Tendencies` <- ifelse(df_new$`Violent Tendencies` == 'TRUE', 1, 0)
+df_new$`May Abuse Drugs` <- ifelse(df_new$`May Abuse Drugs` == 'TRUE', 1, 0)
+df_new$`Suicidal Tendencies` <- ifelse(df_new$`Suicidal Tendencies` == 'TRUE', 1, 0)
+df_new$`Bi-Polar` <- ifelse(df_new$`Bi-Polar` == 'TRUE', 1, 0)
+df_new$`In Need Of Medications` <- ifelse(df_new$`In Need Of Medications` == 'TRUE', 1, 0)
+df_new$`Suicide Risk` <- ifelse(df_new$`Suicide Risk` == 'TRUE', 1, 0)
+df_new$sex <- ifelse(df_new$sex == 'Female', 1, 0)
+
+df_new <- dummy_cols(df_new, select_columns = c("race", "hair", "eyes"))
+df_new <- subset(df_new, select = -c(build, nationality, race, hair, eyes, status, possible_countries, nationality,
+                                     hair_NA, eyes_NA, race_NA))
+
+states <- c("Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
+            "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky",
+            "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+            "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York",
+            "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
+            "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
+            "West Virginia", "Wisconsin", "Wyoming")
+
+df_new$place_of_birth <- ifelse(sub(".*, ", "", df_new$place_of_birth) %in% states, 1,
+                                ifelse(is.na(df_new$place_of_birth), NA, 0))
+
+##LISTA ¯ALI
+#status/possible_countries/build dropuje, za du¿o na
+#nationality imho bez sensu, bo to FBI wiêc bêdzie du¿o hamerykanów i biased set
 
 # scars_and_marks
-df_new$scars_and_marks <- ifelse(!is.na(df_new$scars_and_marks), T, F)
+df_new$scars_and_marks <- ifelse(!is.na(df_new$scars_and_marks), 1, 0)
 #weight
-# to do - naprawic xD bo sa rozne wartosci, wez jakis parse_number czy cos
-# i jak sa 2 wartosci to srednia wyciagnij idk
-df_new$weight <- sub(" pounds.*", "", df_new$weight)
+df_new$weight <- replace(df_new$weight, df_new$weight == "Unknown", NA)
+df_new$weight <- replace(df_new$weight, df_new$weight == "", NA)
+df_new$weight <- replace(df_new$weight, df_new$weight == "Unknown (heavy-set build)", NA)
+df_new$weight <- replace(df_new$weight, df_new$weight == "Infant (at the time of disappearance)", NA)
+
+
+for (i in 1:length(df_new$weight)){
+  while (is.na(df_new$weight[i])){
+    i <- i + 1
+  }
+  gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))
+  temp <- as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i])))
+  if (floor(log10(temp)) == 1){
+    temp <- gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))
+    df_new$weight[i] <- temp
+  }else if (floor(log10(temp))  == 2){
+    temp <- gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))
+    df_new$weight[i] <- temp
+  }else if (floor(log10(temp))  == 3){
+    temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),1,2)) + 
+             as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),3,4)))/2
+    df_new$weight[i] <- temp
+  }else if (floor(log10(temp))  == 4){
+    temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),1,2)) + 
+             as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),3,5)))/2
+    df_new$weight[i] <- temp
+  }else if (floor(log10(temp))  == 5){
+    temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),1,3)) + 
+             as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),4,6)))/2
+    df_new$weight[i] <- temp
+  }
+}
+
 
 #place of birth
 df_new$place_of_birth <- sapply(strsplit(df_new[['place_of_birth']], ', '), tail, 1)
