@@ -8,22 +8,22 @@ library(dplyr)
 library(lubridate)
 library(SHAPforxgboost)
 library(lime)
+library(caret)
+library(xgboost)
+library(purrr)
+
 
 get_api_data <- function(pages, person_classification = '', status = '') {
   if (!is.numeric(pages)){
     stop('Pages is not a number!')
   } else if (pages %% 50 != 0) {
     stop('Pages is not dividable by 50!')
-  } 
-
-  if (!is.character(person_classification)) {
+  } else if (!is.character(person_classification)) {
     stop('Person_classification must be a string!')
   } else if ( !(person_classification %in% c('', 'Main', 'Victim',
                                              'Accomplice'))) {
     stop('Invalid value. Valid values: Main, Victim or Accomplice')
-  }
-  
-  if (!is.character(status)) {
+  } else if (!is.character(status)) {
     stop('Status must be a string!')
   } else if ( !(person_classification %in% c('', 'na', 'captured',
                                              'recovered', 'located',
@@ -52,7 +52,6 @@ get_api_data <- function(pages, person_classification = '', status = '') {
   return(output_df)
 }
 
-
 clean_api_data <- function(input_df, rm_reward = T) {
   if (!is.data.frame(input_df)){
     stop('First argument must be a DataFrame!')
@@ -72,7 +71,7 @@ clean_api_data <- function(input_df, rm_reward = T) {
   clean_reward <- function(reward_row) {
     if (is.na(reward_row)) {
       return('No information')
-    } else {
+    }
       first_split <- strsplit(reward_row, 'up to ')[[1]][2]
       if(is.na(first_split)) {
         return('No specified amount')
@@ -87,7 +86,6 @@ clean_api_data <- function(input_df, rm_reward = T) {
         }
       }
     }
-  }
   
   # date
   clean_date <- function(date_col) {
@@ -173,22 +171,10 @@ clean_api_data <- function(input_df, rm_reward = T) {
     return(output_df)
   }
 
-  
-  # place of birth (USA)
-  states <- c("Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
-              "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky",
-              "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
-              "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York",
-              "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
-              "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
-              "West Virginia", "Wisconsin", "Wyoming")
-  
   #weight
-  df_new$weight <- replace(df_new$weight, df_new$weight == "Unknown", NA)
-  df_new$weight <- replace(df_new$weight, df_new$weight == "", NA)
-  df_new$weight <- replace(df_new$weight, df_new$weight == "Unknown (heavy-set build)", NA)
-  df_new$weight <- replace(df_new$weight, df_new$weight == "Infant (at the time of disappearance)", NA)
-  
+  df_new$weight[df_new$weight %in% c("Unknown", "", "Unknown (heavy-set build)",
+                                     "Infant (at the time of disappearance)")] <- NA
+
   # weight loop
   for (i in 1:length(df_new$weight)){
     while (is.na(df_new$weight[i])){
@@ -217,6 +203,15 @@ clean_api_data <- function(input_df, rm_reward = T) {
     }
   }
   
+  # place of birth (USA)
+  states <- c("Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
+              "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky",
+              "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+              "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York",
+              "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
+              "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
+              "West Virginia", "Wisconsin", "Wyoming")
+  
   final_df <- df_new %>% 
     split_vector_cols(col_names = c('field_offices')) %>%
     clear_warning_message() %>%
@@ -230,7 +225,7 @@ clean_api_data <- function(input_df, rm_reward = T) {
            weight = as.numeric(weight)) %>%
     dummy_cols(select_columns = c('race', 'hair', 'eyes')) %>%
     create_off_dummies() %>%
-    subset(select = -c(build, nationality, race, hair, eyes, status,
+    subset(select = -c(build, nationality, race, race_, hair, hair_, eyes, eyes_, status,
                        possible_countries, nationality, hair_NA, eyes_NA, race_NA,
                        height_max, height_min, reward_text, publication, place_of_birth)) %>%
     na.omit()
@@ -242,7 +237,6 @@ clean_api_data <- function(input_df, rm_reward = T) {
   
   return(final_df)
 }
-
 
 fbi_df <- get_api_data(1000)
 clean_fbi_df <- clean_api_data(fbi_df)
@@ -287,79 +281,123 @@ plotting_graphs(clean_fbi_df, "Dangerous")
 plotting_graphs(clean_fbi_df, "born_in_usa")
 plotting_graphs(clean_fbi_df, "Age")
 
-
-regressionMetrics <- function(real, predicted) {
-  # Mean Square Error
-  MSE <- mean((real - predicted)^2)
-  # Root Mean Square Error
-  RMSE <- sqrt(MSE)
-  # Mean Absolute Error
-  MAE <- mean(abs(real - predicted))
-  # Mean Absolute Percentage Error
-  MAPE <- mean(abs(real - predicted)/real)
-  # Median Absolute Error
-  MedAE <- median(abs(real - predicted))
-  # Mean Logarithmic Absolute Error
-  MSLE <- mean((log(1 + real) - log(1 + predicted))^2)
-  # R2
-  R2 <- cor(predicted, real)^2
+train_test_split <- function(input_df, train_size = .75, dependent_variable) {
+  if (!is.data.frame(input_df)){
+    stop('First argument must be a DataFrame!')
+  } else if (!is.numeric(train_size)) {
+    stop('Second argument must be numeric!')
+  } else if (train_size >= 1 | train_size <= 0) {
+    stop('Second argument must take values from range (0, 1)!')
+  } else if (!is.character(dependent_variable)) {
+    stop('Third arguement must be a character!')
+  } else if (!dependent_variable %in% colnames(input_df)) {
+    stop('Third argument must be a column name. Try calling colnames() on your df.')
+  }
   
-  result <- data.frame(MSE, RMSE, MAE, MAPE, MedAE, MSLE, R2)
-  return(result)
+  sample <- sample.int(n = nrow(input_df), size = floor(train_size * nrow(input_df)), replace = F)
+  train <- input_df[sample, ]
+  test <- input_df[-sample, ]
+  
+  y_train <- train[dependent_variable]
+  y_test <- test[dependent_variable]
+  X_train <- train[, !(names(train) %in% dependent_variable)]
+  X_test <- test[, !(names(test) %in% dependent_variable)]
+  
+  return(list(X_train, X_test, y_train, y_test))
 }
 
 set.seed(2137)
+train_test_list <- train_test_split(clean_fbi_df, train_size = 0.75, dependent_variable = 'Flight Risk')
 
-# Now Selecting 75% of data as sample from total 'n' rows of the data  
-sample <- sample.int(n = nrow(input_df), size = floor(.75*nrow(input_df)), replace = F)
-train <- input_df[sample, ]
-test  <- input_df[-sample, ]
+X_train <- train_test_list[[1]]
+X_test <- train_test_list[[2]]
+y_train <- train_test_list[[3]]
+y_test <- train_test_list[[4]]
 
-y_train = train[, dependent_variable]
-y_test <- test[, dependent_variable]
-X_train = train[, !(names(train) %in% dependent_variable)]
-X_test = test[, !(names(test) %in% dependent_variable)]
 
-library(xgboost)
-train_xgboost <- function(input_df, dependent_variable, X_train, X_test,
-                          y_train, y_test) {
-  
+train_xgboost <- function(X_train, X_test, y_train, y_test) {
+  if (!is.data.frame(X_train) | !is.data.frame(X_test) |
+      !is.data.frame(y_train) | !is.data.frame(y_test)) {
+    stop('Every argument must be a DataFrame!')
+  } 
   # binary variable
-  binary_vars <- sapply(input_df, function(x) { all(x %in% 0:1) })
+  binary_vars <- sapply(cbind(X_train, y_train),
+                        function(x) { all(x %in% 0:1) })
+  # retrieve dependent variable from y df
+  dependent_variable <- colnames(y_train)
+  
   if (dependent_variable %in% names(binary_vars)) {
     xgb <- xgboost(data = data.matrix(X_train),
-                   label = y_train,
+                   label = y_train[[dependent_variable]],
                    nrounds = 25,
-                   objective = "binary:logistic")
+                   objective = "binary:logistic",
+                   eval_metric = "auc")
     y_pred <- predict(xgb, data.matrix(X_test))
     prediction <- as.numeric(y_pred > 0.5)
   } else {
     xgb <- xgboost(data = data.matrix(X_train),
-                   label = y_train,
-                   nrounds = 25)
+                   label = y_train[[dependent_variable]],
+                   nrounds = 25,
+                   eval_metric = "rmse")
     y_pred <- predict(xgb, data.matrix(X_test))
-    print(regressionMetrics(y_test, y_pred))
   }
   return(xgb)
 }
 
-xgb_model <- train_xgboost(input_df, 'Flight Risk', X_train, X_test,
-                           y_train, y_test)
+xgb_model <- train_xgboost(X_train, X_test, y_train, y_test)
 
+setOldClass('xgb.Booster') # because xgb is S3 and we want to obtain clear code
+explainer <- setClass("explainer",
+                      slots = c(model = "xgb.Booster",
+                                X_train = "data.frame",
+                                X_test = "data.frame"),
+                      )
 
-explain_local <- function(xgb_model, X_train, X_test, observation) {
-  explainer <- lime(X_train, xgb_model)
-  explanation <- explain(X_test[observation, ], explainer,
-                         labels = 1, n_features = 5)
-  plot_features(explanation)
-}
-explain_local(xgb_model, X_train, X_test, 2)
+setGeneric(name = "local_explain",
+           def = function(x, y) {
+             standardGeneric("local_explain")
+           })
 
+setMethod("local_explain",
+          signature = c("explainer", "numeric"),
+          definition = function(x, y) {
+            range <- nrow(x@X_test)
+            if (y < 1 | y > range) {
+              stop(paste('Your y must be in range 1 :', range))
+            }
+            explainer <- lime(x@X_train, x@model)
+            explanation <- explain(x@X_test[y, ], explainer,
+                                   labels = 1, n_features = 5)
+            plot_features(explanation)
+          } 
+)
 
-explain_global <- function(xgb_model, X_train, X_test, n_features) {
-  shap_values <- shap.values(xgb_model = xgb_model, X_train = as.matrix(X_train))
-  shap_long <- shap.prep(shap_contrib = shap_values$shap_score
-                         , X_train = as.matrix(X_train), top_n = n_features)
-  shap.plot.summary(shap_long)
-}
-explain_global(xgb_model, X_train, X_test, 10)
+setGeneric(name = "global_explain",
+           def = function(x, y) {
+             standardGeneric("global_explain")
+           })
+
+setMethod("global_explain",
+          signature = c("explainer", "numeric"),
+          definition = function(x, y) {
+            range <- length(colnames((x@X_test)))
+            if (y < 1 | y > range) {
+              stop(paste('Your y must be in range 1 :', range, 'although max 15 is recommended'))
+            } else if (y > 15) {
+              warning("Max 15 features are recommended due to chart's readability")
+            }
+            shap_values <- shap.values(xgb_model = x@model,
+                                       X_train = as.matrix(x@X_train))
+            shap_long <- shap.prep(shap_contrib = shap_values$shap_score,
+                                   X_train = as.matrix(X_train),
+                                   top_n = y)
+            shap.plot.summary(shap_long)
+          } 
+)
+
+expl <- explainer(model = xgb_model,
+                  X_train = X_train,
+                  X_test = X_test)
+
+local_explain(expl, 84)
+global_explain(expl, 15)
