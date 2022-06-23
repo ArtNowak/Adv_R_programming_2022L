@@ -53,7 +53,13 @@ get_api_data <- function(pages, person_classification = '', status = '') {
 }
 
 
-clean_api_data <- function(input_df) {
+clean_api_data <- function(input_df, rm_reward = T) {
+  if (!is.data.frame(input_df)){
+    stop('First argument must be a DataFrame!')
+  } else if (!is.logical(rm_reward)) {
+    stop('Second argument must be a boolean!')
+  }
+
   desired_cols <- c('reward_text', 'publication', 'warning_message',
                     'field_offices', 'sex', 'scars_and_marks', 'build', 
                     'nationality', 'race', 'hair', 'weight', 'place_of_birth',
@@ -61,9 +67,6 @@ clean_api_data <- function(input_df) {
                     'height_max')
   
   df_new <- input_df[, desired_cols]
-  
-  # tego nie robimy
-  #input_df$reward <- parse_number(input_df[, 'reward_text'])
   
   # reward
   clean_reward <- function(reward_row) {
@@ -93,14 +96,9 @@ clean_api_data <- function(input_df) {
       stop('Not a date column')
     }
     
-    year <- as.numeric(format(as.Date(date_col), '%Y'))
-    month <- as.numeric(format(as.Date(date_col), '%m'))
-    day <- as.numeric(format(as.Date(date_col), '%d'))
-    
     weekday <- wday(as.Date(date_col), label=TRUE)
     
-    output_df <- data.frame(Year = year, Month = month,
-                            Day = day, Weekday = weekday)
+    output_df <- data.frame(Weekday = weekday)
     
     for (i in unique(output_df$Weekday)) {
       output_df[[str_to_title(i)]] <- ifelse(grepl(i, output_df$Weekday), 1, 0)
@@ -112,20 +110,28 @@ clean_api_data <- function(input_df) {
   
   # split list variables
   split_vector_cols <- function(col_names, df) {
-    for (i in col_names) {
-      #deal with empty lists
-      df[[i]][lapply(df[[i]], length) == 0] <- NA
+    if (!is.vector(col_names)) {
+      stop('Argument col_names must be a vector!')
+    } else if (!is.data.frame(df)) {
+      stop('Argument df must be a DataFrame!')
     }
+    # replace empty lists with NA
+    df <- df %>%
+      replace(length(.) == 0, NA)
+    
+    # spread values into rows
     for (i in col_names) {
-      # spread values into rows
-      df <- unnest_wider(df, col = i, names_sep = '_')
+      df <- df %>%
+        unnest_wider(col = all_of(i), names_sep = '_')
     }
-    df <- df
     return (df)
   }
   
   # warning_messages
   clear_warning_message <- function(df) {
+    if (!is.data.frame(df)) {
+      stop('Argument must be a DataFrame!')
+    }
     possible_threats <- c('FLIGHT RISK', 'DANGEROUS', 'ARMED', 'ESCAPE RISK',
                           'EXTREMELY DANGEROUS', 'HIGH-RISK ARREST', 
                           'VIOLENT TENDENCIES', 'MAY ABUSE DRUGS',
@@ -140,16 +146,20 @@ clean_api_data <- function(input_df) {
   
   # field offices dummies
   create_off_dummies <- function(df) {
+    if (!is.data.frame(df)) {
+      stop('Argument must be a DataFrame!')
+    }
+    
     offices <- c('field_offices_1', 'field_offices_2', 'field_offices_3')
     offices_dummies <- data.frame()
     for (office in offices) {
       if (office == offices[1]) {
-        offices_df <- dummy_cols(df[, office], select_columns = office,
+        offices_df <- dummy_cols(df[office], select = office,
                                  remove_selected_columns = T) %>% 
           rename_all(~ gsub(paste0(office, '_'), "", .x)) %>%
           replace(is.na(.), 0)
       } else {
-        dummies_df <- dummy_cols(df[, office], select_columns = office,
+        dummies_df <- dummy_cols(df[office], select = office,
                                  remove_selected_columns = T) %>% 
           rename_all(~ gsub(paste0(office, '_'), "", .x)) %>%
           replace(is.na(.), 0)
@@ -159,33 +169,10 @@ clean_api_data <- function(input_df) {
       }
     }
     output_df <- cbind(df, offices_df)
-    output_df <- output_df[, !colnames(output_df) %in% offices]
+    output_df <- output_df[, !colnames(output_df) %in% c(offices, 'NA')]
     return(output_df)
   }
-  
-  #h eight
-  df_new$height <- as.numeric((df_new$height_max + df_new$height_min)/2)
-  df_new <- subset(df_new, select = -c(height_max, height_min))
-  
-  # reward
-  df_new$new_reward <- lapply(df_new$reward_text, clean_reward)
-  df_new <- subset(df_new, select = -c(reward_text))
-  # date
-  df_new <- subset(cbind(df_new, clean_date(df_new$publication)),
-                   select = -c(publication))
-  # vector cols
-  df_new <- split_vector_cols(c('field_offices'), df_new)
-  
-  # warning_message
-  df_new <- clear_warning_message(df_new)
-  
-  # sex
-  df_new$sex <- ifelse(df_new$sex == 'Female', 1, 0)
-  
-  # race, hair, eyes dummies
-  df_new <- dummy_cols(df_new, select_columns = c("race", "hair", "eyes"))
-  df_new <- subset(df_new, select = -c(build, nationality, race, hair, eyes, status, possible_countries, nationality,
-                                       hair_NA, eyes_NA, race_NA))
+
   
   # place of birth (USA)
   states <- c("Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
@@ -195,13 +182,6 @@ clean_api_data <- function(input_df) {
               "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
               "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
               "West Virginia", "Wisconsin", "Wyoming")
-  
-  df_new$born_in_usa <- ifelse(sub(".*, ", "", df_new$place_of_birth) %in% states, 1,
-                               ifelse(is.na(df_new$place_of_birth), NA, 0))
-  df_new <- within(df_new, rm('place_of_birth'))
-  
-  # scars_and_marks
-  df_new$scars_and_marks <- ifelse(!is.na(df_new$scars_and_marks), 1, 0)
   
   #weight
   df_new$weight <- replace(df_new$weight, df_new$weight == "Unknown", NA)
@@ -236,10 +216,29 @@ clean_api_data <- function(input_df) {
       df_new$weight[i] <- temp
     }
   }
-  df_new$weight <- as.numeric(df_new$weight)
   
-  final_df <- create_off_dummies(df_new)
-  final_df <- na.omit(final_df)
+  final_df <- df_new %>% 
+    split_vector_cols(col_names = c('field_offices')) %>%
+    clear_warning_message() %>%
+    cbind(clean_date(df_new$publication)) %>%
+    mutate(height = (height_max + height_min)/2,
+           new_reward = lapply(reward_text, clean_reward),
+           sex = ifelse(sex == 'Female', 1, 0),
+           born_in_usa = ifelse(sub(".*, ", "", place_of_birth) %in% states, 1,
+                                ifelse(is.na(place_of_birth), NA, 0)),
+           scars_and_marks = ifelse(!is.na(df_new$scars_and_marks), 1, 0),
+           weight = as.numeric(weight)) %>%
+    dummy_cols(select_columns = c('race', 'hair', 'eyes')) %>%
+    create_off_dummies() %>%
+    subset(select = -c(build, nationality, race, hair, eyes, status,
+                       possible_countries, nationality, hair_NA, eyes_NA, race_NA,
+                       height_max, height_min, reward_text, publication, place_of_birth)) %>%
+    na.omit()
+  
+  if (rm_reward) {
+    final_df <- final_df %>%
+      subset(select = -c(new_reward))
+  }
   
   return(final_df)
 }
@@ -247,14 +246,18 @@ clean_api_data <- function(input_df) {
 
 fbi_df <- get_api_data(1000)
 clean_fbi_df <- clean_api_data(fbi_df)
-# zostawilem reward, ale to usune w modelowaniu - fajnie jakby to bylo na plocie - jakies biny czy inne cuda 
+
 glimpse(clean_fbi_df)
 
-input_df <- within(clean_fbi_df, rm('new_reward', 'Year', 'Month', 'Day'))
-
-cols_list <- c("sex", "scars_and_marks", "Dangerous", "born_in_usa")
-
 plotting_graphs <- function(data, column){
+  if (!is.data.frame(data)){
+    stop('First argument must be a DataFrame!')
+  } else if (!is.character(column)) {
+    stop("Second argument can only take values: 'sex', 'scars_and_marks', 'Dangerous', 'born_in_usa'")
+  }
+  
+  cols_list <- c("sex", "scars_and_marks", "Dangerous", "born_in_usa")
+  
   if (any(cols_list == column)){
     if (column == "sex"){
       temp <- table(data[, column])
@@ -274,7 +277,7 @@ plotting_graphs <- function(data, column){
               xlab = "No/Yes", col = c("darkblue", "red"))
     }
   }else {
-    print("This column can't be plotted!")
+    print("Only columns: 'sex', 'scars_and_marks', 'Dangerous', 'born_in_usa' can plotted!")
   }
 }
 
