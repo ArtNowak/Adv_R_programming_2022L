@@ -107,22 +107,41 @@ clean_api_data <- function(input_df, rm_reward = T) {
   }
   
   # split list variables
-  split_vector_cols <- function(col_names, df) {
+  split_vector_cols <- function(df, col_names) {
     if (!is.vector(col_names)) {
-      stop('Argument col_names must be a vector!')
+      stop('Second argument must be a vector!')
     } else if (!is.data.frame(df)) {
-      stop('Argument df must be a DataFrame!')
+      stop('First argument must be a DataFrame!')
     }
     # replace empty lists with NA
-    df <- df %>%
+    df[col_names] <- df[col_names] %>%
       replace(length(.) == 0, NA)
     
-    # spread values into rows
-    for (i in col_names) {
-      df <- df %>%
-        unnest_wider(col = all_of(i), names_sep = '_')
+    field_offices <- map_dfc(col_names, 
+                             ~ unnest_wider(df[.x], all_of(.x), names_sep = "_"))
+    
+    offices <- colnames(field_offices)
+    
+    for (office in offices) {
+      if (office == offices[1]) {
+        offices_df <- dummy_cols(field_offices[office], select = office,
+                                 remove_selected_columns = T) %>% 
+          rename_all(~ gsub(paste0(office, '_'), "", .x)) %>%
+          replace(is.na(.), 0)
+      } else {
+        dummies_df <- dummy_cols(field_offices[office], select = office,
+                                 remove_selected_columns = T) %>% 
+          rename_all(~ gsub(paste0(office, '_'), "", .x)) %>%
+          replace(is.na(.), 0)
+        for (colname in colnames(dummies_df)) {
+          offices_df[[colname]] == offices_df[[colname]] + dummies_df[[colname]]
+        }
+      }
     }
-    return (df)
+    output_df <- cbind(df, offices_df)
+    output_df <- output_df[, !colnames(output_df) %in% c(offices, 'NA')]
+    
+    return (output_df)
   }
   
   # warning_messages
@@ -141,66 +160,45 @@ clean_api_data <- function(input_df, rm_reward = T) {
     df <- within(df, rm('warning_message'))
     return(df)
   }
-  
-  # field offices dummies
-  create_off_dummies <- function(df) {
-    if (!is.data.frame(df)) {
-      stop('Argument must be a DataFrame!')
-    }
-    
-    offices <- c('field_offices_1', 'field_offices_2', 'field_offices_3')
-    offices_dummies <- data.frame()
-    for (office in offices) {
-      if (office == offices[1]) {
-        offices_df <- dummy_cols(df[office], select = office,
-                                 remove_selected_columns = T) %>% 
-          rename_all(~ gsub(paste0(office, '_'), "", .x)) %>%
-          replace(is.na(.), 0)
-      } else {
-        dummies_df <- dummy_cols(df[office], select = office,
-                                 remove_selected_columns = T) %>% 
-          rename_all(~ gsub(paste0(office, '_'), "", .x)) %>%
-          replace(is.na(.), 0)
-        for (colname in colnames(dummies_df)) {
-          offices_df[[colname]] == offices_df[[colname]] + dummies_df[[colname]]
+
+  #weight
+  transform_weight <- function(weight_col) {
+    weight_col[weight_col %in% c("Unknown", "", "Unknown (heavy-set build)",
+                                 "Infant (at the time of disappearance)")] <- NA
+
+    column_transformer <- function(col) {
+      for (i in 1:length(col)) {
+        while (is.na(col[i])) {
+          i <- i + 1
+        }
+        gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))
+        temp <- as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i])))
+        if (floor(log10(temp)) == 1){
+          temp <- gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))
+          col[i] <- temp
+        }else if (floor(log10(temp))  == 2){
+          temp <- gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))
+          col[i] <- temp
+        }else if (floor(log10(temp))  == 3){
+          temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))),1,2)) +
+                     as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))),3,4)))/2
+          col[i] <- temp
+        }else if (floor(log10(temp))  == 4){
+          temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))),1,2)) +
+                     as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))),3,5)))/2
+          col[i] <- temp
+        }else if (floor(log10(temp))  == 5){
+          temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))),1,3)) +
+                     as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", col[i]))),4,6)))/2
+          col[i] <- temp
         }
       }
     }
-    output_df <- cbind(df, offices_df)
-    output_df <- output_df[, !colnames(output_df) %in% c(offices, 'NA')]
-    return(output_df)
-  }
-
-  #weight
-  df_new$weight[df_new$weight %in% c("Unknown", "", "Unknown (heavy-set build)",
-                                     "Infant (at the time of disappearance)")] <- NA
-
-  # weight loop
-  for (i in 1:length(df_new$weight)){
-    while (is.na(df_new$weight[i])){
-      i <- i + 1
-    }
-    gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))
-    temp <- as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i])))
-    if (floor(log10(temp)) == 1){
-      temp <- gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))
-      df_new$weight[i] <- temp
-    }else if (floor(log10(temp))  == 2){
-      temp <- gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))
-      df_new$weight[i] <- temp
-    }else if (floor(log10(temp))  == 3){
-      temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),1,2)) + 
-                 as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),3,4)))/2
-      df_new$weight[i] <- temp
-    }else if (floor(log10(temp))  == 4){
-      temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),1,2)) + 
-                 as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),3,5)))/2
-      df_new$weight[i] <- temp
-    }else if (floor(log10(temp))  == 5){
-      temp <- (as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),1,3)) + 
-                 as.numeric(substr(as.numeric(gsub("\\D+", "", gsub("\\s*\\([^\\)]+\\)", "", df_new$weight[i]))),4,6)))/2
-      df_new$weight[i] <- temp
-    }
+    
+    weight_col <- weight_col %>%
+      column_transformer
+    
+    return(weight_col)
   }
   
   # place of birth (USA)
@@ -221,13 +219,12 @@ clean_api_data <- function(input_df, rm_reward = T) {
            sex = ifelse(sex == 'Female', 1, 0),
            born_in_usa = ifelse(sub(".*, ", "", place_of_birth) %in% states, 1,
                                 ifelse(is.na(place_of_birth), NA, 0)),
-           scars_and_marks = ifelse(!is.na(df_new$scars_and_marks), 1, 0),
-           weight = as.numeric(weight)) %>%
+           weight = transform_weight(weight),
+           scars_and_marks = ifelse(!is.na(df_new$scars_and_marks), 1, 0)) %>%
     dummy_cols(select_columns = c('race', 'hair', 'eyes')) %>%
-    create_off_dummies() %>%
     subset(select = -c(build, nationality, race, race_, hair, hair_, eyes, eyes_, status,
                        possible_countries, nationality, hair_NA, eyes_NA, race_NA,
-                       height_max, height_min, reward_text, publication, place_of_birth)) %>%
+                       height_max, height_min, reward_text, publication, place_of_birth, field_offices)) %>%
     na.omit()
   
   if (rm_reward) {
